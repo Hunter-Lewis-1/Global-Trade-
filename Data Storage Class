@@ -1,0 +1,58 @@
+import shelve
+import zlib
+import pickle
+
+class ShelveDataManager:
+    def __init__(self, shelve_file='processed_data.shelve'):
+        self.shelve_file = shelve_file
+
+    def save_to_shelve(self, data_dict, key):
+        '''Compress and save data dictionary to shelve file'''
+        with shelve.open(self.shelve_file) as shelf:
+            # Compress the data before saving
+            compressed_data = zlib.compress(pickle.dumps(data_dict))
+            shelf[key] = compressed_data
+
+    def load_from_shelve(self, key):
+        '''Load and decompress data dictionary from shelve file'''
+        with shelve.open(self.shelve_file) as shelf:
+            if key in shelf:
+                # Decompress the data after loading
+                compressed_data = shelf[key]
+                return pickle.loads(zlib.decompress(compressed_data))
+            else:
+                print(f"Key {key} not found in shelve.")
+                return None
+
+    def delete_from_shelve(self, key):
+        '''Delete a key from the shelve file'''
+        with shelve.open(self.shelve_file) as shelf:
+            if key in shelf:
+                del shelf[key]
+                print(f"Key '{key}' deleted from shelve.")
+            else:
+                print(f"Key '{key}' not found in shelve.")
+
+    def change_key_name(self, old_key, new_key):
+        '''Change the key name in the shelve file'''
+        with shelve.open(self.shelve_file) as shelf:
+            if old_key in shelf:
+                if new_key in shelf:
+                    print(f"Key '{new_key}' already exists in shelve.")
+                else:
+                    # Copy the compressed data under the new key
+                    shelf[new_key] = shelf[old_key]
+                    del shelf[old_key]
+                    print(f"Key '{old_key}' renamed to '{new_key}'.")
+            else:
+                print(f"Key '{old_key}' not found in shelve.")
+
+    def load_all_from_shelve(self):
+        '''Load all data from shelve as a decompressed dictionary'''
+        data_dict = {}
+        with shelve.open(self.shelve_file) as shelf:
+            for key in shelf.keys():
+                # Decompress each value after loading
+                compressed_data = shelf[key]
+                data_dict[key] = pickle.loads(zlib.decompress(compressed_data))
+        return data_dict
