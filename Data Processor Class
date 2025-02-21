@@ -1,0 +1,183 @@
+import pandas as pd
+import numpy as np
+import os
+from shelve_handler import ShelveDataManager
+
+class ExcelDataProcessor:
+    def __init__(self,  shelve_manager, books=None):
+            self.shelve_manager= shelve_manager
+            if books:
+                self.books = book  # Excel file path
+                self.sheet_names = pd.ExcelFile(book).sheet_names  # Get sheet names
+            else: 
+                self.sheet_names = [] # if all files are processed, no need to point towards a book 
+    
+    def load_and_process_sheet(self, sheet):
+        '''Reads Excel Sheet and processes the data into a DataFrame. Used primarily as input for process_sheets where it is iterated over for an entire workbook'''
+        
+        df = pd.read_excel(self.book, 
+                           sheet_name=sheet,
+                           skiprows=2, 
+                           skipfooter=1,
+                           usecols=lambda x: 'Data Type' not in x,
+                           index_col=None,
+                           converters={'Country': str, 
+                                       'HTS Number': int}
+                          )
+        #Each import/export has an HTS Figure, which can be rolled up into a "Section" https://hts.usitc.gov/, HTS Number (also known as a chapter) > Section (labels below) 
+        bins = [0, 5, 14,15, 24, 27, 38, 40, 43, 46, 49, 63, 67, 70, 71, 83, 85, 89,92, 93, 96,97,99]
+        labels = ['Animal Products', 'Vegetable Products','Animal or Vegetable Fats and Oils', 'Prepared Foodstuffs', 'Mineral Products', 
+                    'Chemicals and Allied Industries', 'Plastics and Rubbers', 'Raw Hides/Furs/Leather',
+                    'Wood/Wood Products', 'Pulp of Wood or of Other Fibrous Cellulosic Material', 'Textiles', 'Footwear & Headgear', 'Stone and Glass','Precious Metals',
+                    'Metals', 'Machinery and Mechanical Appliances Electrical Equipment', 
+                    'Vehicles, Aircraft, Vessels and Associated Transport Equipment', 
+                    'Optical, Photographic, Cinematographic, Measuring, Checking, Precision, Medical or Surgical Instruments and Apparatus; Clocks and Watches; Musical Instruments; Parts and Accessories Thereof',
+                    'Arms and Ammunition; Parts and Accessories Thereof', 'Miscellaneous Manufactured Articles',
+                    'Works of Art, Collectors Pieces and Antiques',
+                    'Special Classification Provisions',
+                 ]
+        
+        # Create the 'Section/Industry Group Column' column
+        df['IG'] = pd.cut(df['HTS Number'], bins=bins, labels=labels, right=True, include_lowest=True)
+        
+        # Isolate Date Columns to display in yyyy-mm-dd format, excel format is in Jan-Feb- March with year in cell a2 
+        date_col = df.iloc[:, 3:df.columns.get_loc('IG')].columns
+        date_df = []
+        for x in date_col: 
+            date = pd.to_datetime(sheet[:4] + x, format='%Y%b').date()
+            date_adj = pd.to_datetime(date + pd.offsets.MonthEnd(0), format='%Y%b').date() ### get the last day of month 
+            date_df.append(date_adj)
+
+        # Rename date columns with datetime representation
+        df = df.rename(columns=dict(zip(date_col, date_df)))
+    
+        return df
+    
+    def optimize_data_types(self, df):
+        """
+        Optimize data types of a DataFrame to reduce memory usage.
+
+        Args:
+            df (pd.DataFrame): The DataFrame to optimize.
+
+        Returns:
+            pd.DataFrame: The optimized DataFrame.
+        """
+        for col in df.columns:
+            col_dtype = df[col].dtype
+
+            # Optimize integers
+            if pd.api.types.is_integer_dtype(col_dtype):
+                df[col] = pd.to_numeric(df[col], downcast='integer')
+
+            # Optimize floats
+            elif pd.api.types.is_float_dtype(col_dtype):
+                df[col] = pd.to_numeric(df[col], downcast='float')
+
+            # Optimize string
+            elif pd.api.types.is_object_dtype(col_dtype):
+                # Convert to category if number of unique values is small
+                if df[col].nunique() / len(df[col]) < 0.5:
+                    df[col] = df[col].astype('category')
+
+            # Optimize booleans 
+            elif pd.api.types.is_bool_dtype(col_dtype):
+                df[col] = df[col].astype('bool')
+
+        return df
+
+    
+    
+           
+    def process_sheets(self):
+        '''Process each sheet and store the resulting dictionary. 
+           Example Usage: 
+           
+           shelve_manager = ShelveDataManager(shelve_file='processed_data.shelve') #example of adding a file
+           processor = ExcelDataProcessor(shelve_manager=shelve_manager, book="Domestic Exports.xlsx")
+
+           processor.process_sheets()
+
+           Result: Processor Book (Total Exports.xlsx) is iterated through self.load_and_process_sheets, returning a dictionary of DF's, these DF's are then input into a dict() and stored in shelved
+                   once executed, code can be deleted until updates to the books underlying data is needed '''
+
+        dict_of_sheets = {}
+        for sheet in self.sheet_names:
+            dict_of_sheets[sheet] = self.load_and_process_sheet(sheet)
+
+        # Generate a clean key name based on the file name
+        key_name = os.path.splitext(os.path.basename(self.book))[0]
+        print(f"Saving data to shelve with key:{key_name}")
+        
+        # Save the processed data to shelve
+        self.shelve_manager.save_to_shelve(dict_of_sheets, key_name)
+    
+    
+    def create_final_dataframes(self):
+        '''Create final DataFrames with World totals for all shelve data
+            Example Usage: 
+            Initiates shelvedatamanager class with file route set, needed to point towards our stored dict(s)
+            
+            shelve_manager= ShelveDataManager(shelve_file='processed_data.shelve')
+
+            #With all Dictionaries stored in Shelve, book=None as no new data is processed
+            processor = ExcelDataProcessor(shelve_manager=shelve_manager)
+
+            final_dfs = processor.create_final_dataframes()
+            final_dfs['General Imports'] '''
+        # Load all data from shelve
+        all_data = self.shelve_manager.load_all_from_shelve()
+
+        if not all_data:
+            print("No data found in shelve.")
+            return None
+
+        # Dictionary to store the final DataFrames for each key-xsl file
+        final_dataframes = {}
+
+        # Iterate through each key in the shelve data
+        for key, final_dict in all_data.items():
+            print(f"Processing final DataFrame for:{key}")
+
+            # Create the final DataFrame for the current key's data (all sheets in that file)
+            dfs = []
+
+            # Iterate through each sheet in the current file
+            for sheet_name, df in final_dict.items():
+                # Set the DataFrame index (Country, IG, HTS Number, Description)
+                df.set_index(['Country', 'IG', 'HTS Number', 'Description'], inplace=True)
+                dfs.append(df)
+
+                # Concatenate all DataFrames (sheets) for the current key into one DataFrame
+                dfs_combined = pd.concat(dfs, axis=0)
+
+                # Fill NA values in DataFrame
+                import_df = dfs_combined.fillna(0)
+
+                # Convert all numeric columns to integers
+                numeric_columns = import_df.select_dtypes(include=['number']).columns
+                import_df[numeric_columns] = import_df[numeric_columns].fillna(0).astype(int)
+
+                # Add the 'World' column
+                import_df['World'] = "World"
+
+                # Set the 'World' index (to keep it at the top level)
+                import_df.set_index(['World', import_df.index], inplace=True)
+                
+                #melt frame 
+                melted_df = pd.melt(import_df.reset_index(),
+                                    id_vars=['World', 'Country', 'IG', 'HTS Number', 'Description'],
+                                    var_name='Month',
+                                    value_name='Value')
+                                    
+                melted_df = melted_df[melted_df['Value']!= 0] # drop all 0 values from dataframe                    
+                melted_df['Month'] = pd.to_datetime(melted_df['Month']) #convert to readable dates 
+                melted_df['Description'] = melted_df['Description'].str.title() #Create Proper Text formatting 
+                melted_df
+
+
+                # Store the final DataFrame for the current file
+                final_dataframes[key] = melted_df 
+
+        print("Final DataFrames created for all files.")
+        return final_dataframes
