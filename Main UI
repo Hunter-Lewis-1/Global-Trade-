@@ -1,0 +1,11 @@
+from xldp2 import ExcelDataProcessor
+from shelve_handler import ShelveDataManager 
+import glob
+from GUI import Gui
+
+
+#With all Dictionaries stored in Shelve, book=None as no new data is processed
+processor = ExcelDataProcessor(shelve_manager=shelve_manager)
+final_dfs = processor.create_final_dataframes()
+GUI = final_dfs['Key'].display()
+GUI
