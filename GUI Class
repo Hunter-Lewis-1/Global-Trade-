@@ -1,0 +1,187 @@
+import pandas as pd
+import plotly.express as px
+import ipywidgets as widgets
+from IPython.display import display, clear_output
+
+class Gui:
+    def __init__(self, df):
+        self.df = df
+        self.header_html = """
+        <div style="
+            background-color: [#1a1a1a];
+            padding: 20px;
+            border-radius: 10px 10px 0 0;
+            margin-bottom: 20px;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+            <h1 style="
+                color: white;
+                margin: 0;
+                font-size: 24px;
+                font-family: Arial, sans-serif;">
+                US TRADE BREAKDOWN
+            </h1>
+        </div>
+        """
+        self.style = """
+        <style>
+            .widget-dropdown > select {
+                background-color: [#2a2a2a];
+                color: white;
+                border: 1px solid [#3a3a3a];
+                border-radius: 5px;
+                padding: 5px 10px;
+                font-size: 16px;
+                width: 300px;
+            }
+            .widget-dropdown > select:hover {
+                border-color: #4a4a4a;
+            }
+            .widget-label {
+                color: white;
+                font-size: 16px;
+                font-family: Arial, sans-serif;
+            }
+        </style>
+        """
+        self.top_n_slider = widgets.IntSlider(
+            value=50,
+            min=1,
+            max=300,
+            step=1,
+            description="Country Total",
+            style={'description_width': 'initial'}
+        )
+        self.container = self.create_container()
+
+        # Output widget for displaying the treemap
+        self.output = self.container.children[-1].children[0]
+        self.update_plot()
+
+
+    def return_months(self):
+        """Returns all available months in the DataFrame"""
+        df = self.df 
+        available_months = df['Month'].unique()
+        return available_months
+    
+    def text_break(self, text, words_per_line=2):
+        """Breaks text into multiple lines for better readability.
+        Adjusts the number of words per line dynamically"""
+        words = text.split()
+        result = []
+        for i in range(0, len(words), words_per_line):
+            result.append(" ".join(words[i:i + words_per_line]))
+        return '<br>'.join(result)
+
+
+    def truncate_text(self, text, max_length):
+        '''Additional Formatting Function to limit character length'''
+        if len(text) > max_length:
+            return text[:max_length - 3] + "..."
+        else: text
+        # Remove trailing <br> if present
+        text = text.rstrip("<br>")
+        return text
+    
+    def create_treemap(self, month_selected, top_n):
+        """
+        Main fig
+        """
+        df = self.df
+    
+        # Filter data by selected month and top N values
+        df_month = df[df['Month'] == pd.to_datetime(month_selected)].nlargest(top_n, 'Value')
+
+        # Helper function to truncate labels
+        def truncate_label(label):
+            words = label.split()
+            return " ".join(words[:2]) + ("..." if len(words) > 2 else "")
+
+        # Apply truncation for intermediate levels
+        df_month['Country'] = df_month['Country'].apply(truncate_label)
+        df_month['IG'] = df_month['IG'].apply(truncate_label)
+
+        # Create the treemap
+        fig = px.treemap(
+            df_month,
+            path=['World', 'Country', 'IG', 'Description'],  # Hierarchy levels
+            values='Value',
+            color='Value',
+            color_continuous_scale='RdBu'
+        )
+
+        # Customize layout
+        fig.update_layout(
+            width=1600,
+            height=750,
+            uniformtext=dict(minsize=10, mode='hide'),
+            margin=dict(t=30, l=20, b=30, r=20),
+            font=dict(family="Arial, sans-serif"),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            coloraxis_colorbar=dict(
+            title="Value",
+            tickfont=dict(size=10, color='white'),
+            titlefont=dict(size=10, color='white')
+            )
+        )
+
+        # Ensure full labels on drill down
+        fig.update_traces(
+            textinfo="label+value",
+            textfont=dict(size=16),
+            insidetextfont=dict(size=14),
+            hovertemplate='<b>%{label}</b><br>Value: %{value}<extra></extra>'
+        )
+
+        return fig
+    
+    def create_container(self):
+        """Creates and returns the main container for the app"""
+        container = widgets.VBox([
+            widgets.HTML(self.style + self.header_html),
+            widgets.HBox([
+                widgets.VBox([
+                    widgets.Dropdown(
+                        options=self.return_months().astype('datetime64[D]'),
+                        value=self.return_months().astype('datetime64[D]')[0],
+                        description='Select Month:',
+                        style={'description_width': 'initial'},
+                        layout=widgets.Layout(width='300px')
+                    ),
+                    self.top_n_slider,
+                ], layout=widgets.Layout(
+                    border='1px solid [#3a3a3a]',
+                    padding='10px',
+                    border_radius='5px',
+                    background_color='#1a1a1a',
+                    margin='0 auto'
+                ))
+            ], layout=widgets.Layout(justify_content='flex-start')),
+
+            widgets.HBox([
+                widgets.Output()
+            ], layout=widgets.Layout(justify_content='center'))
+        ], layout=widgets.Layout(align_items='center'))
+
+        # Observe changes in dropdown and slider
+        self.top_n_slider.observe(self.update_plot, names='value')
+        container.children[1].children[0].children[0].observe(self.update_plot, names='value')
+
+        return container
+
+
+
+    def update_plot(self, change=None):
+        """Updates the plot based on selected month and top_n"""
+        with self.output:
+            clear_output(wait=True)
+            selected_month = self.container.children[1].children[0].children[0].value
+            top_n = self.top_n_slider.value
+            fig = self.create_treemap(selected_month, top_n)
+            fig.show()
+
+    def display(self):
+        """Displays the container with all widgets"""
+        display(self.container)
